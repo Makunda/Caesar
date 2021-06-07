@@ -14,12 +14,12 @@ import static java.lang.Math.exp;
 
 public class DivideController {
 
-  public static final String ERROR_CODE = "DIVCx";
+  private static final String ERROR_CODE = "DIVCx";
 
-  public static final Long MIN_CLIQUE_SIZE = 100L;
-  public static final Long MAX_CLIQUE_SIZE = 3000L;
+  private static final Long MIN_CLIQUE_SIZE = 100L;
+  private static final Long MAX_CLIQUE_SIZE = 3000L;
 
-  public static final String DEMETER_LEVEL_TAG = "$l_";
+  private static final String DEMETER_LEVEL_TAG = "$l_";
   private static final Double MIN_SIMILARITY_MERGE = 0.5;
   private static final String SIMILARITY_LINK = "SIMILARITY";
   private static final String COMMUNITY = "COMMUNITY";
@@ -62,22 +62,28 @@ public class DivideController {
     new Color(0x7e, 0x1e, 0x9c), //  purple
   };
 
+
   Neo4jAL neo4jAL;
   String application;
   String levelName;
 
   Node level;
   List<Node> candidates;
+  List<Node> transactionList;
+
 
   public DivideController(Neo4jAL neo4jAL, String application, String level) {
     this.neo4jAL = neo4jAL;
     this.application = application;
     this.levelName = level;
+
+    this.candidates = new ArrayList<>();
+    this.transactionList = new ArrayList<>();
   }
 
   /**
    * Run the divide & conquer algorithm
-   *
+   * All steps have been clearly identified
    * @throws Neo4jQueryException
    * @throws Neo4jNoResult
    * @throws Exception
@@ -115,6 +121,18 @@ public class DivideController {
               "(%d ms) %d isolated nodes  were removed from the level.",
               timeElapsed, removed.size()));
 
+
+      neo4jAL.logInfo("Performing the label propagation over transactions.");
+      start = System.currentTimeMillis();
+      this.transactionLabelPropagation();
+      finish = System.currentTimeMillis();
+      timeElapsed = finish - start;
+      neo4jAL.logInfo(
+              String.format(
+                      "(%d ms) %d Transactions have been identified and grouped.",
+                      timeElapsed, transactionList.size()));
+
+
       neo4jAL.logInfo("Extracting undecided nodes (nodes present in multiple levels).");
       start = System.currentTimeMillis();
       List<Node> undecided = this.extractUndecided();
@@ -141,6 +159,13 @@ public class DivideController {
       finish = System.currentTimeMillis();
       timeElapsed = finish - start;
       neo4jAL.logInfo(String.format("(%d ms) %d Nodes were colored.", timeElapsed, numberNode));
+
+      neo4jAL.logInfo("Assign DrillDown property.");
+      start = System.currentTimeMillis();
+      assignDrilldownNodes();
+      finish = System.currentTimeMillis();
+      timeElapsed = finish - start;
+      neo4jAL.logInfo(String.format("(%d ms) Node's drilldown communities were reassigned..", timeElapsed));
 
     } catch (Exception e) {
       neo4jAL.logError("Execution of the divideLevel failed.", e);
@@ -244,7 +269,9 @@ public class DivideController {
    * step will be to build a map of the interactions / similarity between these communities. Then
    * they are regrouped together based on their size and similarity. For the remaining ones, if
    * they're too big, they will remain the same, if they're too small they will be merged in a
-   * potpourri
+   * potpourri.
+   *
+   * Node flags as undecided will be removed from the investigation list
    *
    * @return
    * @throws Neo4jQueryException
@@ -330,8 +357,9 @@ public class DivideController {
       }
     }
 
+    // Assign a Demeter Tag to create a new group after the end of the transaction
     Long comId = 0L;
-    String comIdPrefix = String.format("$l_External_%s_", levelName);
+    String comIdPrefix = String.format("%sExternal_%s_", DEMETER_LEVEL_TAG, levelName);
     for (Set<Node> nodes : communityMap.values()) {
       String tag = String.format("%s%d", comIdPrefix, comId);
       communityNodeMap.put(tag, nodes);
@@ -362,6 +390,9 @@ public class DivideController {
 
     neo4jAL.logInfo(String.format("%d communities will be created.", communityNodeMap.size()));
 
+    // Group the objects by communities
+
+
     // Apply tags on objects
     List<Node> returnList = new ArrayList<>();
     for (Map.Entry<String, Set<Node>> en : communityNodeMap.entrySet()) {
@@ -390,12 +421,10 @@ public class DivideController {
   }
 
   /**
-   * Perform a label propagation on the transactions
-   *
+   * Perform  a label propagation on the Transactions in on application. And flag the transactions with a community id
    * @throws Neo4jQueryException
    */
-  public void extractByTransactions() throws Neo4jQueryException {
-
+  private void transactionLabelPropagation() throws Neo4jQueryException {
     neo4jAL.logInfo("Starting the Label Propagation on transaction..");
 
     // Link transactions by similarity
@@ -403,12 +432,12 @@ public class DivideController {
     this.linkTransactions();
 
     String reqTransaction =
-        String.format(
-            "MATCH (t:Transaction:`%1$s`)-[:Contains]->(o:Object:`%1$s`) "
-                + "WITH t, COLLECT(o) as objects "
-                + "WHERE SIZE(objects) > 10 "
-                + "RETURN DISTINCT t as transaction",
-            application);
+            String.format(
+                    "MATCH (t:Transaction:`%1$s`)-[:Contains]->(o:Object:`%1$s`) "
+                            + "WITH t, COLLECT(o) as objects "
+                            + "WHERE SIZE(objects) > 10 "
+                            + "RETURN DISTINCT t as transaction",
+                    application);
     Result res = neo4jAL.executeQuery(reqTransaction);
 
     // Extract the result of the transaction query
@@ -420,13 +449,13 @@ public class DivideController {
       // Assign label + increment to get an unique label
       n.setProperty(TRANSACTION_COMMUNITY, label);
       label++;
-      transactionList.add(n);
+      this.transactionList.add(n);
     }
 
     neo4jAL.logInfo(
-        String.format(
-            "%d Transactions have been discovered ( with filtering ) and %d labels applied.",
-            transactionList.size(), label));
+            String.format(
+                    "%d Transactions have been discovered ( with filtering ) and %d labels applied.",
+                    this.transactionList.size(), label));
 
     // Propagate the labels
     int modifications = 0;
@@ -438,16 +467,16 @@ public class DivideController {
       // New results are stored in a map to avoid changing an iteration while it's running
       Map<Node, Long> nodeLabelMap = new HashMap<>();
       // Parse the node and get the new label for each node
-      for (Node n : transactionList) {
+      for (Node n : this.transactionList) {
         // Get the most present label around
         Long newLabel =
-            this.getNeighborsLabel(
-                n,
-                "Transaction",
-                Direction.INCOMING,
-                SIMILARITY_LINK,
-                WEIGHT_PROPERTY,
-                TRANSACTION_COMMUNITY);
+                this.getNeighborsLabel(
+                        n,
+                        "Transaction",
+                        Direction.INCOMING,
+                        SIMILARITY_LINK,
+                        WEIGHT_PROPERTY,
+                        TRANSACTION_COMMUNITY);
         Long lastLabel = (Long) n.getProperty(TRANSACTION_COMMUNITY);
 
         if (newLabel == null) continue;
@@ -464,15 +493,23 @@ public class DivideController {
       }
 
       neo4jAL.logInfo(
-          String.format(
-              "Iteration %d on %d (max) - Modifications : %d ",
-              actualIt, maxIteration, modifications));
-      // if(modifications == 0) break; // Break the loop if no modifications where detected
+              String.format(
+                      "Iterations %d on %d (max) - Modifications : %d ",
+                      actualIt, maxIteration, modifications));
     }
+
+  }
+
+  /**
+   * Perform a label propagation on the transactions
+   *
+   * @throws Neo4jQueryException
+   */
+  private void extractByTransactions() throws Neo4jQueryException {
 
     // Display the results
     Map<Long, List<Node>> communityResults = new HashMap<>();
-    for (Node n : transactionList) {
+    for (Node n : this.transactionList) {
       Long lastLabel = (Long) n.getProperty(TRANSACTION_COMMUNITY);
 
       if (!communityResults.containsKey(lastLabel))
@@ -484,9 +521,9 @@ public class DivideController {
     neo4jAL.logInfo("Community map :");
     for (Map.Entry<Long, List<Node>> en : communityResults.entrySet()) {
       neo4jAL.logInfo(
-          String.format(
-              "Id of the community : %d , size of the community : %d",
-              en.getKey(), en.getValue().size()));
+              String.format(
+                      "Id of the community : %d , size of the community : %d",
+                      en.getKey(), en.getValue().size()));
     }
 
     // Merge nodes under the community
@@ -513,6 +550,95 @@ public class DivideController {
               transactionLabel);
       neo4jAL.executeQuery(req, params);
     }
+
+  }
+
+  /**
+   * Assign to all the nodes a property to allow the drilldown.
+   * Small communities will be merged in DEFAULT
+   *
+   * @return
+   * @throws Neo4jQueryException
+   */
+  private void assignDrilldownNodes() throws Neo4jQueryException {
+    String drillDownProperty = "DrillDown";
+    String defaultGroup = "DEFAULT";
+    Long minCliqueSize = 30L;
+
+    Long numNode = 0L;
+
+    // Initialize all nodes to DEFAULT
+    String iniReq = String.format("MATCH (l:Level5:%1$s)-[]->(o:Object) " +
+                "WHERE ID(l)=$idLevel " +
+                "SET o.%2%s=$defaultValue", application, drillDownProperty);
+    Map<String, Object> iniParams =
+            Map.of(
+                    "defaultValue",
+                    defaultGroup,
+                    "idLevel",
+                    level.getId());
+
+    neo4jAL.executeQuery(iniReq, iniParams);
+    neo4jAL.logInfo(String.format("DEBUG : Exploring %d transactions ", transactionList.size()));
+
+    // Transactions List
+    int success = 0, errors = 0;
+    Map<Long, Set<Node>> communityMap = new HashMap<>();
+    for(Node transaction : this.transactionList) {
+
+      String req =
+              String.format("MATCH (t:Transaction)-[]->(o:Object)<-[]-(l:Level5) " +
+                      "WHERE ID(t)=$idTransaction AND ID(l)=$idLevel " +
+                      "RETURN t.%1$s as comId, COLLECT(DISTINCT o) as objects", TRANSACTION_COMMUNITY, drillDownProperty);
+
+
+      Map<String, Object> params =
+              Map.of(
+                      "idTransaction",
+                      transaction.getId(),
+                      "idLevel",
+                      level.getId());
+
+
+      Result res = neo4jAL.executeQuery(req, params);
+      while (res.hasNext()) {
+        try {
+          Map<String, Object> r = res.next();
+
+          // Verify that the community Id is a long, otherwise skip it
+          Long idCom =  (Long) r.get("comId");;
+
+          if(!communityMap.containsKey(idCom)) communityMap.put(idCom, new HashSet<>());
+          communityMap.get(idCom).addAll((List<Node>) r.get("objects"));
+          success++;
+        } catch (Exception ignored) {
+          errors++; // Ignore but count errors
+          continue;
+        }
+      }
+    }
+
+    neo4jAL.logInfo(String.format("Drilldown communities identified. %d successfully discovered, %d error during processing.", success, errors));
+
+    // Treat community map, and assign drilldown
+    for(Map.Entry<Long, Set<Node>> en : communityMap.entrySet()) {
+      String drillDownProp = defaultGroup;
+
+      if(en.getValue().size() > minCliqueSize) {
+        // If the size of the clique is sufficient flag
+        // Else apply default property
+        drillDownProp = String.format("Cluster_%d", en.getKey());
+      }
+
+      for(Node n: en.getValue()) {
+        // Apply the new Drilldown prop on the nodes
+        n.setProperty(drillDownProperty, drillDownProp);
+        numNode++;
+      }
+
+    }
+
+    neo4jAL.logInfo(String.format("%d nodes drilldown property have been changed.", numNode));
   }
 
   /**
@@ -662,13 +788,6 @@ public class DivideController {
 
         Long commonNode = (long) en.getValue().size() - (long) common.size();
         Double percentage = exp((double) commonNode / (double) common.size());
-
-        int num = new Random().nextInt(50);
-        if (num == 10)
-          neo4jAL.logInfo(
-              String.format(
-                  "DEBUG : Transaction sim between %d and %d : %.2f",
-                  source.getId(), dest.getId(), percentage));
 
         // If no nodes are shared, skip it
         if (percentage == 0 || percentage.isInfinite()) continue;
