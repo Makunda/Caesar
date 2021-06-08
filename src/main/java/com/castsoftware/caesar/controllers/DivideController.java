@@ -570,7 +570,7 @@ public class DivideController {
     // Initialize all nodes to DEFAULT
     String iniReq = String.format("MATCH (l:Level5:%1$s)-[]->(o:Object) " +
                 "WHERE ID(l)=$idLevel " +
-                "SET o.%2%s=$defaultValue", application, drillDownProperty);
+                "SET o.%2$s=$defaultValue", application, drillDownProperty);
     Map<String, Object> iniParams =
             Map.of(
                     "defaultValue",
