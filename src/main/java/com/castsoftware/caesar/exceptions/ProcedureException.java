@@ -70,9 +70,9 @@ public class ProcedureException extends Throwable {
       this.cause = c.getCause();
       this.code = c.getCode();
     } else {
-      this.message = "UNHANDLED EXCEPTION : " + cause.getMessage();
+      this.message = "Java Exception : " + cause.getMessage();
       this.cause = cause;
-      this.code = "-1";
+      this.code = "Native Error";
     }
   }
 
@@ -82,7 +82,7 @@ public class ProcedureException extends Throwable {
 
   @Override
   public String toString() {
-    return "ProcedureException{" + "code='" + code + '\'' + ", message='" + message + '\'';
+    return "ProcedureException with " + "code='" + code + '\'' + ", and message='" + message + '\'';
   }
 
   public String getCode() {

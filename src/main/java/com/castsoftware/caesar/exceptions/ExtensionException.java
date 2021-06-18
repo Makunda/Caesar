@@ -15,7 +15,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * The <code>TaggingException</code> is the based Exception class of the Moirai procedure. It
+ * The <code>TaggingException</code> is the based Exception class of the Caesar procedure. It
  * implements a system of Exception code. Each child class is free to add a prefix to the message or
  * the code. If so, the prefix of the code should be of the form "X{3}_Y{2,3}_" with X the trigram
  * representing the error type and Y the specific identifier. Example for a Neo4j bad request

@@ -27,6 +27,11 @@ public class Neo4jQueryException extends ExtensionException {
     super(MESSAGE_PREFIX.concat(request), cause, CODE_PREFIX.concat(code));
   }
 
+  public Neo4jQueryException(String request, String cause, String code) {
+    super(MESSAGE_PREFIX.concat(request).concat(". Cause : ").concat(cause), CODE_PREFIX.concat(code));
+  }
+
+
   public Neo4jQueryException(String request, String query, Throwable cause, String code) {
     super(
         MESSAGE_PREFIX.concat(request).concat(" . Query : ").concat(query),

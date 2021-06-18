@@ -11,7 +11,6 @@
 
 package com.castsoftware.caesar.configuration;
 
-import com.castsoftware.caesar.database.Neo4jAL;
 import com.castsoftware.caesar.exceptions.file.MissingFileException;
 
 import java.io.IOException;
@@ -33,20 +32,20 @@ public class Configuration {
   public static String get(String key) {
     PROPERTIES = loadConfiguration();
 
-    assert PROPERTIES != null : "Failed to load the configuration file : 'paris.properties'";
+    assert PROPERTIES != null : "Failed to load the configuration file : 'caesar.properties'";
     return PROPERTIES.get(key).toString();
   }
 
   private static Properties loadConfiguration() {
     try (InputStream input =
-        Configuration.class.getClassLoader().getResourceAsStream("paris.properties")) {
+        Configuration.class.getClassLoader().getResourceAsStream("caesar.properties")) {
 
       Properties prop = new Properties();
 
       if (input == null) {
         throw new MissingFileException(
-            "No file 'paris.properties' was found.",
-            "resources/procedure.properties",
+            "No file 'caesar.properties' was found.",
+            "resources/caesar.properties",
             "CONFxLOAD1");
       }
 

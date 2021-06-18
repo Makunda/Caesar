@@ -21,7 +21,7 @@ public class FileCorruptedException extends ExtensionException {
 
   private static final long serialVersionUID = 5538686331898382119L;
   private static final String MESSAGE_PREFIX =
-      "Error, file corrupted and can't be processed by Moirai : ";
+      "Error, file corrupted and can't be processed by Caesar : ";
   private static final String CODE_PREFIX = "FIL_CR_";
 
   public FileCorruptedException(String message, String path, Throwable cause, String code) {

@@ -1,12 +1,20 @@
 package com.castsoftware.caesar.controllers;
 
+import com.castsoftware.caesar.configuration.DetectionConfiguration;
 import com.castsoftware.caesar.database.Neo4jAL;
 import com.castsoftware.caesar.database.Neo4jTypeManager;
+import com.castsoftware.caesar.exceptions.file.FileCorruptedException;
+import com.castsoftware.caesar.exceptions.file.MissingFileException;
+import com.castsoftware.caesar.exceptions.neo4j.Neo4jBadRequestException;
 import com.castsoftware.caesar.exceptions.neo4j.Neo4jNoResult;
 import com.castsoftware.caesar.exceptions.neo4j.Neo4jQueryException;
+import com.castsoftware.caesar.exceptions.workspace.MissingWorkspaceException;
+import com.castsoftware.caesar.workspace.Workspace;
 import org.neo4j.graphdb.*;
 
 import java.awt.*;
+import java.io.IOException;
+import java.net.URISyntaxException;
 import java.util.List;
 import java.util.*;
 
@@ -15,16 +23,6 @@ import static java.lang.Math.exp;
 public class DivideController {
 
   private static final String ERROR_CODE = "DIVCx";
-
-  private static final Long MIN_CLIQUE_SIZE = 100L;
-  private static final Long MAX_CLIQUE_SIZE = 3000L;
-
-  private static final String DEMETER_LEVEL_TAG = "$l_";
-  private static final Double MIN_SIMILARITY_MERGE = 0.5;
-  private static final String SIMILARITY_LINK = "SIMILARITY";
-  private static final String COMMUNITY = "COMMUNITY";
-  private static final String TRANSACTION_COMMUNITY = "COMMUNITY_TRANSACTION";
-  private static final String WEIGHT_PROPERTY = "WEIGHT";
 
   private static final Color[] COLOR_TABLE = {
     new Color(0x05, 0x04, 0xaa), //  royal blue
@@ -63,22 +61,31 @@ public class DivideController {
   };
 
 
-  Neo4jAL neo4jAL;
-  String application;
-  String levelName;
+  private final Neo4jAL neo4jAL;
+  private final DetectionConfiguration configuration;
 
-  Node level;
-  List<Node> candidates;
-  List<Node> transactionList;
+  private final String application;
+  private final String levelName;
+
+  private Node level;
+  private List<Long> candidatesIdList;
+  private List<Long> transactionIdList;
 
 
-  public DivideController(Neo4jAL neo4jAL, String application, String level) {
+  public DivideController(Neo4jAL neo4jAL, String application, String level) throws Exception {
     this.neo4jAL = neo4jAL;
     this.application = application;
     this.levelName = level;
 
-    this.candidates = new ArrayList<>();
-    this.transactionList = new ArrayList<>();
+    try {
+      this.configuration = Workspace.getInstance(neo4jAL).getConfiguration();
+    } catch (Neo4jBadRequestException | IOException | Neo4jQueryException | MissingWorkspaceException | FileCorruptedException  | MissingFileException err) {
+      neo4jAL.logError("Failed to load the configuration.", err);
+      throw new Exception("Failed to instanciate the DivideController class due to a bad configuration.");
+    }
+
+    this.candidatesIdList = new ArrayList<>();
+    this.transactionIdList = new ArrayList<>();
   }
 
   /**
@@ -109,7 +116,7 @@ public class DivideController {
       neo4jAL.logInfo(
           String.format(
               "(%d ms) %d nodes were identified as candidates.",
-              timeElapsed, this.candidates.size()));
+              timeElapsed, this.candidatesIdList.size()));
 
       neo4jAL.logInfo("Removing isolated nodes");
       start = System.currentTimeMillis();
@@ -130,21 +137,21 @@ public class DivideController {
       neo4jAL.logInfo(
               String.format(
                       "(%d ms) %d Transactions have been identified and grouped.",
-                      timeElapsed, transactionList.size()));
+                      timeElapsed, transactionIdList.size()));
 
 
       neo4jAL.logInfo("Extracting undecided nodes (nodes present in multiple levels).");
       start = System.currentTimeMillis();
-      List<Node> undecided = this.extractUndecided();
+      Long undecided = this.extractUndecided();
       finish = System.currentTimeMillis();
       timeElapsed = finish - start;
       neo4jAL.logInfo(
           String.format(
-              "(%d ms) %d undecided nodes were extracted.", timeElapsed, undecided.size()));
+              "(%d ms) %d undecided nodes were extracted.", timeElapsed, undecided));
 
       neo4jAL.logInfo(
           String.format(
-              "After these trimming operations %d nodes are remaining.", candidates.size()));
+              "After these trimming operations %d nodes are remaining.", candidatesIdList.size()));
 
       neo4jAL.logInfo("Grouping node by transaction similarity.");
       start = System.currentTimeMillis();
@@ -155,7 +162,7 @@ public class DivideController {
 
       neo4jAL.logInfo("Coloring nodes.");
       start = System.currentTimeMillis();
-      int numberNode = this.colorNodes(COMMUNITY);
+      int numberNode = this.colorNodes(configuration.getCommunity());
       finish = System.currentTimeMillis();
       timeElapsed = finish - start;
       neo4jAL.logInfo(String.format("(%d ms) %d Nodes were colored.", timeElapsed, numberNode));
@@ -171,7 +178,6 @@ public class DivideController {
       neo4jAL.logError("Execution of the divideLevel failed.", e);
       throw e;
     }
-    // Find the level
 
   }
 
@@ -202,35 +208,35 @@ public class DivideController {
   }
 
   /**
-   * Retrieve the list of candidates nodes under the selected level
+   * Retrieve the list of candidates nodes ID under the selected level
    *
-   * @return The list of nodes to investigate
+   * @return The list of nodes ID to investigate
    * @throws Neo4jQueryException
    */
-  private List<Node> findToInvestigateNodes() throws Neo4jQueryException {
-    this.candidates = new ArrayList<>();
-    if (level == null) return this.candidates; // Level must not be null
+  private List<Long> findToInvestigateNodes() throws Neo4jQueryException {
+    this.candidatesIdList = new ArrayList<>();
+    if (level == null) return this.candidatesIdList; // Level must not be null
 
     // Retrieve all the node under the level and reset the community property
     String matchNodes =
         String.format(
             "MATCH (l:Level5:`%1$s`)-[]->(o:Object:`%1$s`) "
                 + "WHERE ID(l)=$idLevel "
-                + "RETURN o as node",
-            application);
+                + "REMOVE o.%2$s "
+                + "RETURN ID(o) as idNode;",
+            application, configuration.getCommunity());
     Map<String, Object> params = Map.of("idLevel", level.getId());
 
     Result res = neo4jAL.executeQuery(matchNodes, params);
 
     // Parse nodes from the query and append them to the result list
-    Node n;
+    Long n;
     while (res.hasNext()) {
-      n = (Node) res.next().get("node");
-      if (n.hasProperty(COMMUNITY)) n.removeProperty(COMMUNITY);
-      this.candidates.add(n);
+      n = (Long) res.next().get("idNode");
+      this.candidatesIdList.add(n);
     }
 
-    return this.candidates;
+    return this.candidatesIdList;
   }
 
   /**
@@ -250,14 +256,14 @@ public class DivideController {
                     + "SET o.Tags = CASE WHEN o.Tags IS NULL THEN [($levelTag+o.Level+' isolated')] "
                     + "ELSE [ x IN o.Tags WHERE NOT x CONTAINS $levelTag ] + ($levelTag+o.Level+' isolated') END "
                     + "RETURN o as node", application);
-    Map<String, Object> params = Map.of("idLevel", level.getId(), "levelTag", DEMETER_LEVEL_TAG);
+    Map<String, Object> params = Map.of("idLevel", level.getId(), "levelTag", configuration.getDemeterLevelTag());
     Result res = neo4jAL.executeQuery(matchNodes, params);
 
     while (res.hasNext()) {
       Node n = (Node) res.next().get("node");
 
       // Remove the node from the principal list
-      this.candidates.remove(n);
+      this.candidatesIdList.remove(n);
       nodesTrimmed.add(n);
     }
 
@@ -276,7 +282,7 @@ public class DivideController {
    * @return
    * @throws Neo4jQueryException
    */
-  private List<Node> extractUndecided() throws Neo4jQueryException {
+  private Long extractUndecided() throws Neo4jQueryException {
     Map<Node, List<Node>> parentUndecided = new HashMap<>();
 
     // Retrieve all the node under the level
@@ -296,7 +302,7 @@ public class DivideController {
       Node node = (Node) r.get("node");
 
       // Remove node from to investigate list
-      candidates.remove(node);
+      candidatesIdList.remove(node.getId());
 
       if (!parentUndecided.containsKey(parent)) parentUndecided.put(parent, new ArrayList<>());
       parentUndecided.get(parent).add(node);
@@ -315,7 +321,7 @@ public class DivideController {
             (double) (en.getValue().size() - differences.size()) / (double) en.getValue().size();
         Long size = (long) en.getValue().size() + (long) enIt.getValue().size();
 
-        // Create a similairty class and add it to the set
+        // Create a similarity class and add it to the set
         Set<Node> uniqueNodes = new HashSet<>();
         uniqueNodes.addAll(en.getValue());
         uniqueNodes.addAll(enIt.getValue());
@@ -336,7 +342,8 @@ public class DivideController {
       SimClass s = i.next();
 
       // check the size and the similarity of the clique
-      if (s.simPercentage > MIN_SIMILARITY_MERGE && s.size <= MAX_CLIQUE_SIZE) {
+      if (s.simPercentage > configuration.getMinSimilarityMerge()
+          && s.size <= configuration.getMaxCliqueSize()) {
         // Search
         Set<Node> key = searchInLevelMap(communityMap, s);
 
@@ -359,7 +366,7 @@ public class DivideController {
 
     // Assign a Demeter Tag to create a new group after the end of the transaction
     Long comId = 0L;
-    String comIdPrefix = String.format("%sExternal_%s_", DEMETER_LEVEL_TAG, levelName);
+    String comIdPrefix = String.format("%sExternal_%s_", configuration.getDemeterLevelTag(), levelName);
     for (Set<Node> nodes : communityMap.values()) {
       String tag = String.format("%s%d", comIdPrefix, comId);
       communityNodeMap.put(tag, nodes);
@@ -377,7 +384,7 @@ public class DivideController {
       s.nodes.remove(nodeSet);
 
       // Put the small ones in the potpourri
-      if (s.nodes.size() <= MIN_CLIQUE_SIZE) {
+      if (s.nodes.size() <= configuration.getMinCliqueSize()) {
         communityNodeMap.put(tagPotpourri, new HashSet<>(s.nodes));
       } else {
         // Let the big one in their one community
@@ -394,7 +401,7 @@ public class DivideController {
 
 
     // Apply tags on objects
-    List<Node> returnList = new ArrayList<>();
+    Long numFlagged  = 0L;
     for (Map.Entry<String, Set<Node>> en : communityNodeMap.entrySet()) {
       String toApplyTag = en.getKey();
 
@@ -414,10 +421,10 @@ public class DivideController {
 
         n.setProperty("Tags", groupTags.toArray(new String[0]));
       }
-      returnList.addAll(en.getValue());
+      numFlagged += en.getValue().size();
     }
 
-    return returnList;
+    return numFlagged;
   }
 
   /**
@@ -447,19 +454,19 @@ public class DivideController {
     while (res.hasNext()) {
       Node n = (Node) res.next().get("transaction");
       // Assign label + increment to get an unique label
-      n.setProperty(TRANSACTION_COMMUNITY, label);
+      n.setProperty(configuration.getTransactionCommunity(), label);
       label++;
-      this.transactionList.add(n);
+      this.transactionIdList.add(n.getId());
     }
 
     neo4jAL.logInfo(
             String.format(
                     "%d Transactions have been discovered ( with filtering ) and %d labels applied.",
-                    this.transactionList.size(), label));
+                    this.transactionIdList.size(), label));
 
     // Propagate the labels
     int modifications = 0;
-    int maxIteration = 5;
+    int maxIteration = configuration.getLabelPropagationIteration();
 
     // Parse the nodes and compute the next label of the node.
     for (int actualIt = 0; actualIt < maxIteration; actualIt++) {
@@ -467,29 +474,32 @@ public class DivideController {
       // New results are stored in a map to avoid changing an iteration while it's running
       Map<Node, Long> nodeLabelMap = new HashMap<>();
       // Parse the node and get the new label for each node
-      for (Node n : this.transactionList) {
+      for (Long n : this.transactionIdList) {
         // Get the most present label around
+        Node transactionNode = neo4jAL.getNodeById(n);
+        if(transactionNode == null) continue;
+
         Long newLabel =
                 this.getNeighborsLabel(
                         n,
                         "Transaction",
                         Direction.INCOMING,
-                        SIMILARITY_LINK,
-                        WEIGHT_PROPERTY,
-                        TRANSACTION_COMMUNITY);
-        Long lastLabel = (Long) n.getProperty(TRANSACTION_COMMUNITY);
+                        configuration.getSimilarityLink(),
+                        configuration.getWeightProperty(),
+                        configuration.getTransactionCommunity());
+        Long lastLabel = (Long) transactionNode.getProperty(configuration.getTransactionCommunity());
 
         if (newLabel == null) continue;
         if (!newLabel.equals(lastLabel))
           modifications++; // count the modification during this iteration
         // Reassign the node
 
-        nodeLabelMap.put(n, newLabel);
+        nodeLabelMap.put(transactionNode, newLabel);
       }
 
       // Reassign the correct label
       for (Map.Entry<Node, Long> en : nodeLabelMap.entrySet()) {
-        en.getKey().setProperty(TRANSACTION_COMMUNITY, en.getValue());
+        en.getKey().setProperty(configuration.getTransactionCommunity(), en.getValue());
       }
 
       neo4jAL.logInfo(
@@ -509,8 +519,11 @@ public class DivideController {
 
     // Display the results
     Map<Long, List<Node>> communityResults = new HashMap<>();
-    for (Node n : this.transactionList) {
-      Long lastLabel = (Long) n.getProperty(TRANSACTION_COMMUNITY);
+    for (Long idTransaction : this.transactionIdList) {
+      Node n = neo4jAL.getNodeById(idTransaction);
+      if(n == null) continue;
+
+      Long lastLabel = (Long) n.getProperty(configuration.getTransactionCommunity());
 
       if (!communityResults.containsKey(lastLabel))
         communityResults.put(lastLabel, new ArrayList<>());
@@ -528,10 +541,12 @@ public class DivideController {
 
     // Merge nodes under the community
     neo4jAL.logInfo("Assign new labels to objects");
-    for (Node transaction : transactionList) {
+    for (Long transactionId : transactionIdList) {
+      Node transaction = neo4jAL.getNodeById(transactionId);
+      if(transaction == null) continue;
 
       // Match  the objects in the transaction with the specific level
-      Long transactionLabel = Neo4jTypeManager.getAsLong(transaction, TRANSACTION_COMMUNITY, null);
+      Long transactionLabel = Neo4jTypeManager.getAsLong(transaction, configuration.getTransactionCommunity(), null);
       if (transactionLabel == null) continue;
 
       String req =
@@ -539,7 +554,7 @@ public class DivideController {
               "MATCH (t:Transaction)-[]->(o:Object) "
                   + "WHERE ID(t)=$idTransaction AND o.Level=$levelName  "
                   + "SET o.%s=$newLabel ",
-              COMMUNITY);
+              configuration.getCommunity());
       Map<String, Object> params =
           Map.of(
               "idTransaction",
@@ -563,7 +578,7 @@ public class DivideController {
   private void assignDrilldownNodes() throws Neo4jQueryException {
     String drillDownProperty = "DrillDown";
     String defaultGroup = "DEFAULT";
-    Long minCliqueSize = 30L;
+    Long minCliqueSize = configuration.getMinDrillDownSize();
 
     Long numNode = 0L;
 
@@ -579,23 +594,23 @@ public class DivideController {
                     level.getId());
 
     neo4jAL.executeQuery(iniReq, iniParams);
-    neo4jAL.logInfo(String.format("DEBUG : Exploring %d transactions ", transactionList.size()));
+    neo4jAL.logInfo(String.format("DEBUG : Exploring %d transactions ", transactionIdList.size()));
 
     // Transactions List
     int success = 0, errors = 0;
-    Map<Long, Set<Node>> communityMap = new HashMap<>();
-    for(Node transaction : this.transactionList) {
+    Map<Long, Set<Long>> communityMap = new HashMap<>();
+    for(Long transactionId : this.transactionIdList) {
 
       String req =
               String.format("MATCH (t:Transaction)-[]->(o:Object)<-[]-(l:Level5) " +
                       "WHERE ID(t)=$idTransaction AND ID(l)=$idLevel " +
-                      "RETURN t.%1$s as comId, COLLECT(DISTINCT o) as objects", TRANSACTION_COMMUNITY, drillDownProperty);
+                      "RETURN t.%1$s as comId, COLLECT(DISTINCT ID(o)) as objectsID", configuration.getTransactionCommunity(), drillDownProperty);
 
 
       Map<String, Object> params =
               Map.of(
                       "idTransaction",
-                      transaction.getId(),
+                      transactionId,
                       "idLevel",
                       level.getId());
 
@@ -606,10 +621,10 @@ public class DivideController {
           Map<String, Object> r = res.next();
 
           // Verify that the community Id is a long, otherwise skip it
-          Long idCom =  (Long) r.get("comId");;
+          Long idCom =  (Long) r.get("comId");
 
           if(!communityMap.containsKey(idCom)) communityMap.put(idCom, new HashSet<>());
-          communityMap.get(idCom).addAll((List<Node>) r.get("objects"));
+          communityMap.get(idCom).addAll((List<Long>) r.get("objectsID"));
           success++;
         } catch (Exception ignored) {
           errors++; // Ignore but count errors
@@ -621,7 +636,7 @@ public class DivideController {
     neo4jAL.logInfo(String.format("Drilldown communities identified. %d successfully discovered, %d error during processing.", success, errors));
 
     // Treat community map, and assign drilldown
-    for(Map.Entry<Long, Set<Node>> en : communityMap.entrySet()) {
+    for(Map.Entry<Long, Set<Long>> en : communityMap.entrySet()) {
       String drillDownProp = defaultGroup;
 
       if(en.getValue().size() > minCliqueSize) {
@@ -630,8 +645,11 @@ public class DivideController {
         drillDownProp = String.format("Cluster_%d", en.getKey());
       }
 
-      for(Node n: en.getValue()) {
+      for(Long idN: en.getValue()) {
         // Apply the new Drilldown prop on the nodes
+        Node n = neo4jAL.getNodeById(idN);
+        if(n == null) continue;
+
         n.setProperty(drillDownProperty, drillDownProp);
         numNode++;
       }
@@ -662,7 +680,7 @@ public class DivideController {
         String.format(
             "MATCH (l:Level5)-[]->(o:Object) WHERE ID(l)=$idNode AND EXISTS(o.%1$s) "
                 + "RETURN DISTINCT o as node",
-            COMMUNITY);
+            configuration.getCommunity());
 
     // Get all community
     Result res = neo4jAL.executeQuery(req, params);
@@ -670,7 +688,7 @@ public class DivideController {
     while (res.hasNext()) {
       Node n = (Node) res.next().get("node");
 
-      Long comId = Neo4jTypeManager.getAsLong(n, COMMUNITY, null);
+      Long comId = Neo4jTypeManager.getAsLong(n, configuration.getCommunity(), null);
       if (comId == null) continue; // Ignore the node if the community property isn't valid
 
       Color act = COLOR_TABLE[it % COLOR_TABLE.length];
@@ -682,7 +700,7 @@ public class DivideController {
           String.format(
               "MATCH (l:Level5)-[]->(o:Object) WHERE ID(l)=$idNode AND o.%1$s=$comId "
                   + "SET o.Color=$color ",
-              COMMUNITY);
+                  configuration.getCommunity());
       params = Map.of("idNode", level.getId(), "color", color, "comId", comId);
       neo4jAL.executeQuery(reqCol, params);
     }
@@ -703,7 +721,7 @@ public class DivideController {
       if (en.contains(simClass.level1) || en.contains(simClass.level2)) {
 
         // verify if the size will not exceed the maximum clique size
-        if (simClass.nodes.size() + map.get(en).size() < MAX_CLIQUE_SIZE) {
+        if (simClass.nodes.size() + map.get(en).size() < configuration.getMaxCliqueSize()) {
           return en;
         }
 
@@ -716,7 +734,6 @@ public class DivideController {
 
   /**
    * Links the transactions together based on their similarity
-   *
    * @throws Neo4jQueryException
    */
   private void linkTransactions() throws Neo4jQueryException {
@@ -724,7 +741,7 @@ public class DivideController {
     // Remove all previous links between transactions
     String req =
         String.format(
-            "MATCH (n:Transaction:`%s`)-[r:%s]-() DELETE r", application, SIMILARITY_LINK);
+            "MATCH (n:Transaction:`%s`)-[r:%s]-() DELETE r", application, configuration.getSimilarityLink());
     neo4jAL.executeQuery(req);
 
     // Get a map of the transactions
@@ -735,15 +752,15 @@ public class DivideController {
                 + "WITH t, COLLECT(o) as objects "
                 + "WHERE SIZE(objects) > 10 "
                 + "UNWIND objects as o "
-                + "RETURN DISTINCT t as transaction, o as node",
+                + "RETURN DISTINCT t as transaction, ID(o) as IdNode",
             application);
     Result result = neo4jAL.executeQuery(reqLink);
 
-    Map<Node, List<Node>> transactionMap = new HashMap<>();
+    Map<Node, List<Long>> transactionMap = new HashMap<>();
     while (result.hasNext()) {
       Map<String, Object> r = result.next();
       Node transaction = (Node) r.get("transaction");
-      Node n = (Node) r.get("node");
+      Long n = (Long) r.get("IdNode");
 
       if (!transactionMap.containsKey(transaction))
         transactionMap.put(transaction, new ArrayList<>());
@@ -755,8 +772,8 @@ public class DivideController {
     int step = 0;
 
     // Merge transaction by similarity
-    for (Map.Entry<Node, List<Node>> en : transactionMap.entrySet()) {
-      for (Map.Entry<Node, List<Node>> enIt : transactionMap.entrySet()) {
+    for (Map.Entry<Node, List<Long>> en : transactionMap.entrySet()) {
+      for (Map.Entry<Node, List<Long>> enIt : transactionMap.entrySet()) {
 
         step++;
         if (step % 10000 == 0)
@@ -774,7 +791,7 @@ public class DivideController {
         // Check relationships
         for (Relationship rel :
             source.getRelationships(
-                Direction.OUTGOING, RelationshipType.withName(SIMILARITY_LINK))) {
+                Direction.OUTGOING, RelationshipType.withName(configuration.getSimilarityLink()))) {
           Node otherNode = rel.getOtherNode(source);
           if (otherNode.getId() == dest.getId()) existLink = true;
         }
@@ -783,18 +800,19 @@ public class DivideController {
         if (existLink) continue;
 
         // Else check common nodes
-        List<Node> common = new ArrayList<>(en.getValue());
+        List<Long> common = new ArrayList<>(en.getValue());
         common.removeAll(enIt.getValue());
 
-        Long commonNode = (long) en.getValue().size() - (long) common.size();
-        Double percentage = exp((double) commonNode / (double) common.size());
+        // Get the percentage of similarity
+        long commonNode = (long) en.getValue().size() - (long) common.size();
+        double percentage = exp((double) commonNode / (double) common.size());
 
         // If no nodes are shared, skip it
-        if (percentage == 0 || percentage.isInfinite()) continue;
+        if (percentage == 0 || Double.isInfinite(percentage)) continue;
 
         Relationship rel =
-            source.createRelationshipTo(dest, RelationshipType.withName(SIMILARITY_LINK));
-        rel.setProperty(WEIGHT_PROPERTY, percentage);
+            source.createRelationshipTo(dest, RelationshipType.withName(configuration.getSimilarityLink()));
+        rel.setProperty(configuration.getWeightProperty(), percentage);
       }
     }
 
@@ -807,7 +825,7 @@ public class DivideController {
   /**
    * Get the maximum label between the neighbors of one specific node
    *
-   * @param n Node to explore
+   * @param idNode Node ID to explore
    * @param label Label of the nodes
    * @param direction Direction of the relationship
    * @param relationshipName Name of the relationship
@@ -818,13 +836,19 @@ public class DivideController {
    * @throws Neo4jQueryException
    */
   private Long getNeighborsLabel(
-      Node n,
+      Long idNode,
       String label,
       Direction direction,
       String relationshipName,
       String weight,
       String labelProperty)
       throws Neo4jQueryException {
+
+
+    Node n = neo4jAL.getNodeById(idNode);
+    if (n == null) {
+      throw new Neo4jQueryException(String.format("Failed to retrieve nod with ID: %d", idNode), "Get by ID", "DIVCxGNEI01");
+    }
 
     if (!relationshipName.isBlank()) {
       relationshipName = ":" + relationshipName;
