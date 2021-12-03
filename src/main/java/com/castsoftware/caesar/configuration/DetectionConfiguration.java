@@ -5,16 +5,18 @@ import com.castsoftware.caesar.exceptions.file.FileCorruptedException;
 import java.util.Map;
 
 public class DetectionConfiguration {
-	private Long minCliqueSize;
-	private Long maxCliqueSize;
-	private Long minDrillDownSize;
-	private Integer labelPropagationIteration;
-	private Double minSimilarityMerge;
-	private String demeterLevelTag;
-	private String similarityLink;
-	private String community;
-	private String transactionCommunity;
-	private String weightProperty;
+	private final Long minCliqueSize;
+	private final Long maxCliqueSize;
+	private final Long minDrillDownSize;
+	private final Integer labelPropagationIteration;
+	private final Double minSimilarityMerge;
+	private final String demeterLevelTag;
+	private final String similarityLink;
+	private final String community;
+	private final String transactionCommunity;
+	private final String weightProperty;
+
+	private final Boolean propagationConsiderInherit;
 
 	public Long getMinCliqueSize() {
 		return minCliqueSize;
@@ -48,6 +50,10 @@ public class DetectionConfiguration {
 		return transactionCommunity;
 	}
 
+	public Boolean getPropagationConsiderInherit() {
+		return propagationConsiderInherit;
+	}
+
 	public String getWeightProperty() {
 		return weightProperty;
 	}
@@ -74,6 +80,8 @@ public class DetectionConfiguration {
 			this.community = (String) json.get("COMMUNITY");
 			this.transactionCommunity = (String) json.get("TRANSACTION_COMMUNITY");
 			this.weightProperty = (String) json.get("WEIGHT_PROPERTY");
+
+			this.propagationConsiderInherit = (Boolean) json.get("PROPAGATION_CONSIDER_INHERIT");
 
 		} catch (Exception err) {
 			throw new FileCorruptedException("Failed create DetectionConfiguration due to corrupted json file", "DETCxCONS01");

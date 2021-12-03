@@ -81,7 +81,7 @@ public class DivideController {
       this.configuration = Workspace.getInstance(neo4jAL).getConfiguration();
     } catch (Neo4jBadRequestException | IOException | Neo4jQueryException | MissingWorkspaceException | FileCorruptedException  | MissingFileException err) {
       neo4jAL.logError("Failed to load the configuration.", err);
-      throw new Exception("Failed to instanciate the DivideController class due to a bad configuration.");
+      throw new Exception("Failed to instantiate the DivideController class due to a bad configuration.");
     }
 
     this.candidatesIdList = new ArrayList<>();
