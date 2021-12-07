@@ -3,6 +3,7 @@ package com.castsoftware.caesar.controllers;
 import com.castsoftware.caesar.configuration.DetectionConfiguration;
 import com.castsoftware.caesar.database.Neo4jAL;
 import com.castsoftware.caesar.entities.transactions.ClusterTransaction;
+import com.castsoftware.caesar.entities.transactions.ClusterTree;
 import com.castsoftware.caesar.entities.transactions.Transaction;
 import com.castsoftware.caesar.exceptions.file.FileCorruptedException;
 import com.castsoftware.caesar.exceptions.file.MissingFileException;
@@ -65,7 +66,8 @@ public class ClassifyController {
 
 	/**
 	 * Compute the frequency of each category, along with the uniqueness and the number of object
-	 * @return
+	 * @param minSize Minimum size
+	 * @return The list of Cluster
 	 */
 	public List<ClusterTransaction> weightTransactionCategory(Long minSize) throws Neo4jBadRequestException, Exception {
 		TransactionClassifyService transactionService = new TransactionClassifyService();
@@ -73,6 +75,8 @@ public class ClassifyController {
 
 		Long count = Transactions.getTransactionsCount(neo4jAL, application, minSize.intValue());
 		List<Node> transactions = Transactions.getTransactions(neo4jAL, application, minSize.intValue());
+
+		ClusterTree clusterTree = new ClusterTree();
 
 		int it = 0;
 
@@ -83,21 +87,21 @@ public class ClassifyController {
 			Transaction tn = Transactions.getTransactionFromNode(neo4jAL, transactionNode);
 			// Find categories
 			List<String> categories = transactionService.classifyTransaction(tn);
-			for(String cat : categories) {
-				// Declare new cluster if it doesn't exist
-				transactionMap.putIfAbsent(cat, new ClusterTransaction(cat));
-				transactionMap.get(cat).addTransaction(tn);
-			}
+
+			clusterTree.insert(categories, tn);
 		}
 
 		neo4jAL.logInfo(String.format("%d clusters were identified during the process", transactionMap.size()));
 
 		// Compute metrics on set of transaction
-		List<ClusterTransaction> returnList = new ArrayList<>();
-		for(ClusterTransaction ct : transactionMap.values()) {
-			ct.computeSizeMetrics(neo4jAL);
-			returnList.add(ct);
-		}
+		List<ClusterTransaction> returnList = clusterTree.flatten();
+		returnList.forEach(x -> {
+			try {
+				x.computeSizeMetrics(neo4jAL);
+			} catch (Neo4jBadRequestException e) {
+				neo4jAL.logError(String.format("Failed to compute metrics for cluster label [%s]", x.getName()));
+			}
+		});
 
 		return returnList;
 	}

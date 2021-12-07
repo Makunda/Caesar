@@ -325,7 +325,6 @@ public class Transactions {
 			String fullName = (String) tn.getProperty("FullName");
 
 			// Compute metrics
-
 			long size = Transactions.getTransactionSize(neo4jAL, id);
 			long shared = Transactions.getNumberSharedObjects(neo4jAL, id);
 			Double uniqueness = 1 - (double) shared / size;

@@ -46,8 +46,8 @@ public class ClassifyProcedures {
 		}
 	}
 
-	@Procedure(value = "caesar.classify.transactions.weighted", mode = Mode.WRITE)
-	@Description("CALL caesar.classify.transactions.weighted(String application, Long minimumSize) - Check transaction similarity")
+	@Procedure(value = "caesar.classify.cluster", mode = Mode.WRITE)
+	@Description("CALL caesar.classify.cluster(String application, Long minimumSize) - Check transaction similarity")
 	public Stream<ClusterTransactionResult> weightedTransaction(@Name(value = "Application") String application,
 																@Name(value = "MinimumSize", defaultValue = "30") Long minimumSize) throws ProcedureException {
 
